@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+
+venv/
+env/
+fsds/
+fsds_venv/   
+
+.vscode/
+.DS_Store
+*.csv
