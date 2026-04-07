@@ -2,23 +2,33 @@ import math
 import pygame
 import numpy as np
 from shapely.geometry import LineString
-from cone_generation import generate_cones, generate_start_cones
-from csv_writer import export_csv
 from scipy.interpolate import splprep, splev
+
+from fsds_cone_generation import generate_all_cones
+from csv_writer import export_csv
+
 
 pygame.init()
 
-# =========================
+# ============================================================
 # Window setup
-# =========================
+# ============================================================
 WIDTH, HEIGHT = 1200, 760
+LEFT_PANEL_W = 280
+
+DRAW_X = LEFT_PANEL_W + 20
+DRAW_Y = 20
+DRAW_W = WIDTH - LEFT_PANEL_W - 40
+DRAW_H = HEIGHT - 40
+DRAW_RECT = pygame.Rect(DRAW_X, DRAW_Y, DRAW_W, DRAW_H)
+
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Track Designer - Race Edition")
 clock = pygame.time.Clock()
 
-# =========================
+# ============================================================
 # Theme / Colors
-# =========================
+# ============================================================
 BG = (18, 18, 18)
 PANEL = (28, 28, 28)
 PANEL_2 = (38, 38, 38)
@@ -30,112 +40,72 @@ GREEN = (70, 210, 120)
 BLUE = (70, 140, 240)
 YELLOW = (240, 220, 70)
 ORANGE = (255, 160, 60)
-TRACK_GREY = (120, 120, 120)
-TRACK_EDGE = (220, 220, 220)
 GRID = (35, 35, 35)
 ACCENT = (255, 60, 60)
 
-# =========================
-# Layout
-# =========================
-LEFT_PANEL_W = 280
-DRAW_X = LEFT_PANEL_W + 20
-DRAW_Y = 20
-DRAW_W = WIDTH - LEFT_PANEL_W - 40
-DRAW_H = HEIGHT - 40
-DRAW_RECT = pygame.Rect(DRAW_X, DRAW_Y, DRAW_W, DRAW_H)
-
+# ============================================================
+# Buttons
+# ============================================================
 SAVE_BUTTON = pygame.Rect(35, 560, 210, 46)
 CLEAR_BUTTON = pygame.Rect(35, 620, 210, 46)
 
-# =========================
+# ============================================================
 # Fonts
-# =========================
+# ============================================================
 TITLE_FONT = pygame.font.SysFont("arial", 34, bold=True)
 SUBTITLE_FONT = pygame.font.SysFont("arial", 20, bold=True)
 FONT = pygame.font.SysFont("arial", 22)
 SMALL_FONT = pygame.font.SysFont("arial", 18)
 BIG_FONT = pygame.font.SysFont("arial", 56, bold=True)
 
-# =========================
+# ============================================================
+# Scale / geometry rules
+# ============================================================
+SCALE = 0.1  # 1 pixel = 0.1 meter
+CLOSE_THRESHOLD = 30  # pixels
+MIN_CONE_RADIUS_PX = 30
+MIN_CONE_SPACING_M = MIN_CONE_RADIUS_PX * SCALE  # 3.0 meters
+
+# ============================================================
 # State
-# =========================
+# ============================================================
 points = []
 drawing = False
 valid = False
 message = "Draw a closed racing line"
-SCALE = 0.05
-CLOSE_THRESHOLD = 30  # increased to 30 pixels
+
+# ============================================================
+# Utility helpers
+# ============================================================
+def distance(a, b):
+    return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
-# =========================
-# Helpers
-# =========================
-def is_closed(points, threshold=CLOSE_THRESHOLD):
-    if len(points) < 3:
-        return False
-    dx = points[0][0] - points[-1][0]
-    dy = points[0][1] - points[-1][1]
-    return (dx * dx + dy * dy) ** 0.5 < threshold
+def to_meters(pixel_points):
+    return [(x * SCALE, y * SCALE) for x, y in pixel_points]
 
 
-def auto_close_loop(points, threshold=CLOSE_THRESHOLD):
-    if len(points) < 3:
-        return points, False
-
-    if is_closed(points, threshold):
-        if points[0] != points[-1]:
-            return points + [points[0]], True
-        return points, True
-
-    return points, False
+def to_pixels(meter_point):
+    return int(meter_point[0] / SCALE), int(meter_point[1] / SCALE)
 
 
-def validate_track(points):
-    if len(points) < 4:
-        return False, "Too few points"
+def wrap_text(text, max_chars):
+    words = text.split()
+    if not words:
+        return [""]
 
-    line = LineString(points)
+    lines = []
+    current = words[0]
 
-    if not line.is_simple:
-        return False, "Self-intersecting track"
+    for word in words[1:]:
+        if len(current) + 1 + len(word) <= max_chars:
+            current += " " + word
+        else:
+            lines.append(current)
+            current = word
 
-    if points[0] != points[-1]:
-        return False, "Track not closed"
-
-    return True, "Valid track"
-
-
-def smooth_path(points):
-    if len(points) < 4:
-        return points
-
-    pts = np.array(points, dtype=float)
-
-    # Remove consecutive duplicates
-    mask = np.any(np.diff(pts, axis=0) != 0, axis=1)
-    pts = np.concatenate(([pts[0]], pts[1:][mask]))
-
-    if len(pts) < 4:
-        return [tuple(p) for p in pts]
-
-    try:
-        x = pts[:, 0]
-        y = pts[:, 1]
-        tck, _ = splprep([x, y], s=5, per=True)
-        u_new = np.linspace(0, 1, 220)
-        x_new, y_new = splev(u_new, tck)
-        return list(zip(x_new, y_new))
-    except Exception:
-        return [tuple(p) for p in pts]
-
-
-def to_meters(points):
-    return [(x * SCALE, y * SCALE) for x, y in points]
-
-
-def to_pixels(pt):
-    return int(pt[0] / SCALE), int(pt[1] / SCALE)
+    lines.append(current)
+    return lines
 
 
 def draw_text(text, x, y, color=WHITE, font=FONT):
@@ -149,13 +119,98 @@ def draw_center_text(text, y, color=WHITE, font=BIG_FONT):
     screen.blit(img, rect)
 
 
-def distance(a, b):
-    return math.hypot(a[0] - b[0], a[1] - b[1])
+# ============================================================
+# Track validation
+# ============================================================
+def is_closed(track_points, threshold=CLOSE_THRESHOLD):
+    if len(track_points) < 3:
+        return False
+    return distance(track_points[0], track_points[-1]) < threshold
 
 
-# =========================
-# UI drawing
-# =========================
+def auto_close_loop(track_points, threshold=CLOSE_THRESHOLD):
+    if len(track_points) < 3:
+        return track_points, False
+
+    if is_closed(track_points, threshold):
+        if track_points[0] != track_points[-1]:
+            return track_points + [track_points[0]], True
+        return track_points, True
+
+    return track_points, False
+
+
+def validate_track(track_points):
+    if len(track_points) < 4:
+        return False, "Too few points"
+
+    if track_points[0] != track_points[-1]:
+        return False, "Track not closed"
+
+    try:
+        line = LineString(track_points)
+    except Exception:
+        return False, "Invalid track geometry"
+
+    if not line.is_simple:
+        return False, "Self-intersecting track"
+
+    if line.length < 80:
+        return False, "Track too short"
+
+    return True, "Valid track"
+
+
+# ============================================================
+# Path smoothing
+# ============================================================
+def remove_consecutive_duplicates(track_points):
+    if not track_points:
+        return []
+
+    cleaned = [track_points[0]]
+    for pt in track_points[1:]:
+        if pt != cleaned[-1]:
+            cleaned.append(pt)
+    return cleaned
+
+
+def smooth_path(track_points):
+    if len(track_points) < 4:
+        return track_points
+
+    pts = np.array(remove_consecutive_duplicates(track_points), dtype=float)
+
+    if len(pts) < 4:
+        return [tuple(p) for p in pts]
+
+    if not np.array_equal(pts[0], pts[-1]):
+        pts = np.vstack([pts, pts[0]])
+
+    try:
+        x = pts[:, 0]
+        y = pts[:, 1]
+
+        tck, _ = splprep([x, y], s=5, per=True)
+        u_new = np.linspace(0, 1, 240)
+        x_new, y_new = splev(u_new, tck)
+
+        smooth_pts = list(zip(x_new, y_new))
+        if smooth_pts[0] != smooth_pts[-1]:
+            smooth_pts.append(smooth_pts[0])
+
+        return smooth_pts
+
+    except Exception:
+        fallback = [tuple(p) for p in pts]
+        if fallback[0] != fallback[-1]:
+            fallback.append(fallback[0])
+        return fallback
+
+
+# ============================================================
+# UI drawing helpers
+# ============================================================
 def draw_checkered_flag(x, y, cell=8, rows=4, cols=4):
     for r in range(rows):
         for c in range(cols):
@@ -199,6 +254,17 @@ def draw_grid():
         pygame.draw.line(screen, GRID, (DRAW_X, y), (DRAW_X + DRAW_W, y))
 
 
+def draw_track_area():
+    pygame.draw.rect(screen, (24, 24, 24), DRAW_RECT, border_radius=18)
+    pygame.draw.rect(screen, (60, 60, 60), DRAW_RECT, 2, border_radius=18)
+    draw_grid()
+
+    stripe_w = 18
+    for i in range(10):
+        color = WHITE if i % 2 == 0 else (30, 30, 30)
+        pygame.draw.rect(screen, color, (DRAW_X + 20 + i * stripe_w, DRAW_Y + 8, stripe_w, 10))
+
+
 def draw_side_panel():
     pygame.draw.rect(screen, PANEL, (0, 0, LEFT_PANEL_W, HEIGHT))
     pygame.draw.rect(screen, PANEL_2, (0, 0, LEFT_PANEL_W, 100))
@@ -212,23 +278,23 @@ def draw_side_panel():
     draw_text("• Hold mouse and draw track", 35, 165, LIGHT, SMALL_FONT)
     draw_text("• End near start to auto-close", 35, 192, LIGHT, SMALL_FONT)
     draw_text(f"• Close threshold: {CLOSE_THRESHOLD}px", 35, 219, LIGHT, SMALL_FONT)
-    draw_text("• Save exports track.csv", 35, 246, LIGHT, SMALL_FONT)
+    draw_text(f"• Scale: 1 px = {SCALE:.1f} m", 35, 246, LIGHT, SMALL_FONT)
+    draw_text(f"• Cone spacing: {MIN_CONE_SPACING_M:.1f} m", 35, 273, LIGHT, SMALL_FONT)
 
-    draw_text("Status", 35, 310, WHITE, SUBTITLE_FONT)
+    draw_text("Status", 35, 330, WHITE, SUBTITLE_FONT)
 
     badge_color = GREEN if valid else ORANGE if len(points) > 1 else DARK
     badge_text = "VALID" if valid else "DRAWING" if len(points) > 1 else "IDLE"
 
-    pygame.draw.rect(screen, badge_color, (35, 344, 110, 34), border_radius=10)
-    draw_text(badge_text, 62, 351, (15, 15, 15), SMALL_FONT)
+    pygame.draw.rect(screen, badge_color, (35, 364, 110, 34), border_radius=10)
+    draw_text(badge_text, 62, 371, (15, 15, 15), SMALL_FONT)
 
-    draw_text("Message", 35, 410, WHITE, SUBTITLE_FONT)
-
+    draw_text("Message", 35, 430, WHITE, SUBTITLE_FONT)
     wrapped = wrap_text(message, 28)
-    yy = 446
-    for line in wrapped[:4]:
-        draw_text(line, 35, yy, LIGHT, SMALL_FONT)
-        yy += 24
+    y = 466
+    for line in wrapped[:5]:
+        draw_text(line, 35, y, LIGHT, SMALL_FONT)
+        y += 24
 
     draw_button(SAVE_BUTTON, "Save CSV", enabled=valid, icon="save")
     draw_button(CLEAR_BUTTON, "Clear Track", enabled=True, icon="clear")
@@ -236,99 +302,53 @@ def draw_side_panel():
     draw_text("Formula Student style preview", 35, 700, DARK, SMALL_FONT)
 
 
-def wrap_text(text, max_chars):
-    words = text.split()
-    if not words:
-        return [""]
-
-    lines = []
-    current = words[0]
-
-    for word in words[1:]:
-        if len(current) + 1 + len(word) <= max_chars:
-            current += " " + word
-        else:
-            lines.append(current)
-            current = word
-    lines.append(current)
-    return lines
-
-
-def draw_track_area():
-    pygame.draw.rect(screen, (24, 24, 24), DRAW_RECT, border_radius=18)
-    pygame.draw.rect(screen, (60, 60, 60), DRAW_RECT, 2, border_radius=18)
-    draw_grid()
-
-    # Start/finish style strips on top border
-    stripe_w = 18
-    for i in range(10):
-        color = WHITE if i % 2 == 0 else (30, 30, 30)
-        pygame.draw.rect(screen, color, (DRAW_X + 20 + i * stripe_w, DRAW_Y + 8, stripe_w, 10))
-
-
-def draw_track(points, valid):
-    if len(points) < 2:
+def draw_track(track_points, is_valid, currently_drawing):
+    if len(track_points) < 2:
         return
 
-    # Thick shadow
-    pygame.draw.lines(screen, (20, 20, 20), False, points, 12)
+    pygame.draw.lines(screen, (20, 20, 20), False, track_points, 12)
 
-    # Main line
-    base_color = GREEN if valid else RED
-    pygame.draw.lines(screen, base_color, False, points, 4)
+    base_color = GREEN if is_valid else RED
+    pygame.draw.lines(screen, base_color, False, track_points, 4)
 
-    # Start point highlight
-    pygame.draw.circle(screen, WHITE, points[0], 6)
-    pygame.draw.circle(screen, ACCENT, points[0], 12, 2)
+    pygame.draw.circle(screen, WHITE, track_points[0], 6)
+    pygame.draw.circle(screen, ACCENT, track_points[0], 12, 2)
+    pygame.draw.circle(screen, LIGHT, track_points[-1], 4)
 
-    # End point highlight
-    pygame.draw.circle(screen, LIGHT, points[-1], 4)
-
-    # Snap guide when drawing
-    if drawing and len(points) > 2:
-        pygame.draw.circle(screen, BLUE, points[0], CLOSE_THRESHOLD, 1)
-        if distance(points[0], points[-1]) < CLOSE_THRESHOLD:
-            pygame.draw.circle(screen, GREEN, points[0], CLOSE_THRESHOLD, 2)
+    if currently_drawing and len(track_points) > 2:
+        pygame.draw.circle(screen, BLUE, track_points[0], CLOSE_THRESHOLD, 1)
+        if distance(track_points[0], track_points[-1]) < CLOSE_THRESHOLD:
+            pygame.draw.circle(screen, GREEN, track_points[0], CLOSE_THRESHOLD, 2)
 
 
 def draw_preview_cones():
     if not valid:
         return
 
-    smooth = smooth_path(points)
-    track = to_meters(smooth)
+    smooth_pixels = smooth_path(points)
+    track_m = to_meters(smooth_pixels)
 
-    blue, yellow = generate_cones(track)
-    orange = generate_start_cones(track)
+    blue_cones, yellow_cones, orange_cones = generate_all_cones(track_m)
 
-    for p in blue:
-        pygame.draw.circle(screen, BLUE, to_pixels(p), 5)
-        pygame.draw.circle(screen, WHITE, to_pixels(p), 5, 1)
+    for p in blue_cones:
+        px = to_pixels(p)
+        pygame.draw.circle(screen, BLUE, px, 5)
+        pygame.draw.circle(screen, WHITE, px, 5, 1)
 
-    for p in yellow:
-        pygame.draw.circle(screen, YELLOW, to_pixels(p), 5)
-        pygame.draw.circle(screen, WHITE, to_pixels(p), 5, 1)
+    for p in yellow_cones:
+        px = to_pixels(p)
+        pygame.draw.circle(screen, YELLOW, px, 5)
+        pygame.draw.circle(screen, WHITE, px, 5, 1)
 
-    for p in orange:
-        pygame.draw.circle(screen, ORANGE, to_pixels(p), 7)
-        pygame.draw.circle(screen, WHITE, to_pixels(p), 7, 1)
+    for p in orange_cones:
+        px = to_pixels(p)
+        pygame.draw.circle(screen, ORANGE, px, 7)
+        pygame.draw.circle(screen, WHITE, px, 7, 1)
 
 
-# =========================
+# ============================================================
 # Actions
-# =========================
-def save_track():
-    global message
-    smooth = smooth_path(points)
-    track = to_meters(smooth)
-
-    blue, yellow = generate_cones(track)
-    orange = generate_start_cones(track)
-
-    export_csv("track.csv", blue, yellow, orange)
-    message = "Track saved successfully as track.csv"
-
-
+# ============================================================
 def clear_track():
     global points, valid, drawing, message
     points = []
@@ -337,10 +357,30 @@ def clear_track():
     message = "Track cleared"
 
 
-# =========================
+def save_track():
+    global message
+
+    if not valid:
+        message = "Cannot save invalid track"
+        return
+
+    smooth_pixels = smooth_path(points)
+    track_m = to_meters(smooth_pixels)
+
+    blue_cones, yellow_cones, orange_cones = generate_all_cones(track_m)
+
+    if not blue_cones or not yellow_cones:
+        message = "Track too tight or invalid for cone export"
+        return
+
+    export_csv("../track.csv", blue_cones, yellow_cones, orange_cones)
+    message = "Track saved successfully as track.csv"
+
+
+# ============================================================
 # Loading screen
-# =========================
-def show_loading_screen(duration_ms=3000):
+# ============================================================
+def show_loading_screen(duration_ms=1500):
     start_time = pygame.time.get_ticks()
 
     while pygame.time.get_ticks() - start_time < duration_ms:
@@ -351,14 +391,12 @@ def show_loading_screen(duration_ms=3000):
 
         screen.fill((10, 10, 10))
 
-        # Background accents
         for i in range(0, WIDTH, 80):
             pygame.draw.line(screen, (25, 25, 25), (i, 0), (i - 200, HEIGHT), 2)
 
         draw_center_text("TRACK DESIGNER", HEIGHT // 2 - 80, WHITE, BIG_FONT)
         draw_center_text("Race Edition", HEIGHT // 2 - 20, ACCENT, TITLE_FONT)
 
-        # Animated loading bar
         elapsed = pygame.time.get_ticks() - start_time
         progress = min(elapsed / duration_ms, 1.0)
 
@@ -373,7 +411,6 @@ def show_loading_screen(duration_ms=3000):
 
         draw_center_text("Initializing racing surface...", HEIGHT // 2 + 130, LIGHT, SUBTITLE_FONT)
 
-        # Checkered flag
         cx = WIDTH // 2 - 22
         cy = HEIGHT // 2 - 170
         draw_checkered_flag(cx, cy, cell=11, rows=4, cols=4)
@@ -382,61 +419,69 @@ def show_loading_screen(duration_ms=3000):
         clock.tick(60)
 
 
-# =========================
-# Main
-# =========================
-show_loading_screen(3000)
+# ============================================================
+# Main loop
+# ============================================================
+def main():
+    global points, drawing, valid, message
 
-running = True
-while running:
-    screen.fill(BG)
+    show_loading_screen(3000)
 
-    for event in pygame.event.get():
-        if event.type == pygame.QUIT:
-            running = False
+    running = True
+    while running:
+        screen.fill(BG)
 
-        elif event.type == pygame.MOUSEBUTTONDOWN:
-            mouse_pos = pygame.mouse.get_pos()
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
 
-            if SAVE_BUTTON.collidepoint(mouse_pos):
-                if valid:
+            elif event.type == pygame.MOUSEBUTTONDOWN:
+                mouse_pos = pygame.mouse.get_pos()
+
+                if SAVE_BUTTON.collidepoint(mouse_pos):
                     save_track()
-                else:
-                    message = "Cannot save invalid track"
 
-            elif CLEAR_BUTTON.collidepoint(mouse_pos):
-                clear_track()
+                elif CLEAR_BUTTON.collidepoint(mouse_pos):
+                    clear_track()
 
-            elif DRAW_RECT.collidepoint(mouse_pos):
-                drawing = True
-                points = []
-                valid = False
-                message = "Drawing track..."
-
-        elif event.type == pygame.MOUSEBUTTONUP:
-            if drawing:
-                drawing = False
-                closed_points, was_closed = auto_close_loop(points)
-
-                if was_closed:
-                    points = closed_points
-                    valid, message = validate_track(points)
-                else:
+                elif DRAW_RECT.collidepoint(mouse_pos):
+                    drawing = True
+                    points = []
                     valid = False
-                    message = "Track not closed. End closer to the start."
+                    message = "Drawing track..."
 
-        elif event.type == pygame.MOUSEMOTION and drawing:
-            pos = pygame.mouse.get_pos()
-            if DRAW_RECT.collidepoint(pos):
-                if not points or points[-1] != pos:
-                    points.append(pos)
+            elif event.type == pygame.MOUSEBUTTONUP:
+                if drawing:
+                    drawing = False
+                    closed_points, was_closed = auto_close_loop(points)
 
-    draw_side_panel()
-    draw_track_area()
-    draw_track(points, valid)
-    draw_preview_cones()
+                    if not was_closed:
+                        valid = False
+                        message = "Track not closed. End closer to the start."
+                    else:
+                        points = closed_points
+                        valid, message = validate_track(points)
 
-    pygame.display.flip()
-    clock.tick(60)
+            elif event.type == pygame.MOUSEMOTION and drawing:
+                pos = pygame.mouse.get_pos()
 
-pygame.quit()
+                if DRAW_RECT.collidepoint(pos):
+                    if not points:
+                        points.append(pos)
+                    else:
+                        if distance(points[-1], pos) >= 2:
+                            points.append(pos)
+
+        draw_side_panel()
+        draw_track_area()
+        draw_track(points, valid, drawing)
+        draw_preview_cones()
+
+        pygame.display.flip()
+        clock.tick(60)
+
+    pygame.quit()
+
+
+if __name__ == "__main__":
+    main()
