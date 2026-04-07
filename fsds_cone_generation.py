@@ -5,19 +5,19 @@ import numpy as np
 # ============================================================
 # Configuration
 # ============================================================
-PIXEL_RADIUS = 30
+PIXEL_RADIUS = 15
 METERS_PER_PIXEL = 0.1
 MIN_CONE_SPACING = PIXEL_RADIUS * METERS_PER_PIXEL   # 3.0 m
 
-TRACK_WIDTH = 3.6
+TRACK_WIDTH = 3.0
 HALF_TRACK_WIDTH = TRACK_WIDTH / 2.0
-CONE_STEP = 3.6
+CONE_STEP = 2.0
 
 START_GATE_BACK_OFFSET = 1.5
 START_GATE_FORWARD_OFFSET = 1.5
 
 # Radius around the start center where blue/yellow are cleared
-START_CLEAR_RADIUS = 5.0
+START_CLEAR_RADIUS = 3.0
 
 
 # ============================================================

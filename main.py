@@ -1,4 +1,10 @@
+import csv
 import math
+import os
+import subprocess
+import tkinter as tk
+from tkinter import filedialog
+
 import pygame
 import numpy as np
 from shapely.geometry import LineString
@@ -6,65 +12,59 @@ from scipy.interpolate import splprep, splev
 
 from fsds_cone_generation import generate_all_cones
 from csv_writer import export_csv
+from ui_components import (
+    BG,
+    BLUE,
+    WHITE,
+    YELLOW,
+    ORANGE,
+    build_fonts,
+    build_layout,
+    draw_loading_screen,
+    draw_side_panel,
+    draw_track_area,
+    draw_track,
+    draw_invalid_popup,
+)
 
 
 pygame.init()
 
 # ============================================================
-# Window setup
+# Config
 # ============================================================
-WIDTH, HEIGHT = 1200, 760
-LEFT_PANEL_W = 280
+WIDTH, HEIGHT = 1060, 720
+SCALE = 0.13
+MIN_CONE_RADIUS_PX = 10
+MIN_CONE_SPACING_M = MIN_CONE_RADIUS_PX * SCALE
 
-DRAW_X = LEFT_PANEL_W + 20
-DRAW_Y = 20
-DRAW_W = WIDTH - LEFT_PANEL_W - 40
-DRAW_H = HEIGHT - 40
-DRAW_RECT = pygame.Rect(DRAW_X, DRAW_Y, DRAW_W, DRAW_H)
+ANCHOR_LINE_LENGTH = 50
+ANCHOR_RADIUS = 20
+ANCHOR_Y_OFFSET_FROM_CENTER = 100
 
+FSDS_EXE_PATH = r"D:\Coding\Srishti_26\fsds-v2.2.0-windows\FSDS.exe"
+
+# ============================================================
+# UI / Window
+# ============================================================
 screen = pygame.display.set_mode((WIDTH, HEIGHT))
 pygame.display.set_caption("Track Designer - Race Edition")
 clock = pygame.time.Clock()
+fonts = build_fonts()
+layout = build_layout(WIDTH, HEIGHT, left_panel_w=300)
+
+DRAW_RECT = layout["DRAW_RECT"]
+
+ANCHOR_CENTER_X = DRAW_RECT.x + DRAW_RECT.w // 2
+ANCHOR_CENTER_Y = DRAW_RECT.y + DRAW_RECT.h // 2 - ANCHOR_Y_OFFSET_FROM_CENTER
+END_POINT = (ANCHOR_CENTER_X - ANCHOR_LINE_LENGTH // 2, ANCHOR_CENTER_Y)
+START_POINT = (ANCHOR_CENTER_X + ANCHOR_LINE_LENGTH // 2, ANCHOR_CENTER_Y)
 
 # ============================================================
-# Theme / Colors
+# Dialog root
 # ============================================================
-BG = (18, 18, 18)
-PANEL = (28, 28, 28)
-PANEL_2 = (38, 38, 38)
-WHITE = (240, 240, 240)
-LIGHT = (200, 200, 200)
-DARK = (100, 100, 100)
-RED = (220, 70, 70)
-GREEN = (70, 210, 120)
-BLUE = (70, 140, 240)
-YELLOW = (240, 220, 70)
-ORANGE = (255, 160, 60)
-GRID = (35, 35, 35)
-ACCENT = (255, 60, 60)
-
-# ============================================================
-# Buttons
-# ============================================================
-SAVE_BUTTON = pygame.Rect(35, 560, 210, 46)
-CLEAR_BUTTON = pygame.Rect(35, 620, 210, 46)
-
-# ============================================================
-# Fonts
-# ============================================================
-TITLE_FONT = pygame.font.SysFont("arial", 34, bold=True)
-SUBTITLE_FONT = pygame.font.SysFont("arial", 20, bold=True)
-FONT = pygame.font.SysFont("arial", 22)
-SMALL_FONT = pygame.font.SysFont("arial", 18)
-BIG_FONT = pygame.font.SysFont("arial", 56, bold=True)
-
-# ============================================================
-# Scale / geometry rules
-# ============================================================
-SCALE = 0.1  # 1 pixel = 0.1 meter
-CLOSE_THRESHOLD = 30  # pixels
-MIN_CONE_RADIUS_PX = 30
-MIN_CONE_SPACING_M = MIN_CONE_RADIUS_PX * SCALE  # 3.0 meters
+tk_root = tk.Tk()
+tk_root.withdraw()
 
 # ============================================================
 # State
@@ -72,10 +72,16 @@ MIN_CONE_SPACING_M = MIN_CONE_RADIUS_PX * SCALE  # 3.0 meters
 points = []
 drawing = False
 valid = False
-message = "Draw a closed racing line"
+message = "Start in the right circle and end in the left circle"
+
+selected_csv_path = None
+last_saved_csv_path = None
+loaded_csv_cones = {"blue": [], "yellow": [], "orange": []}
+
+show_invalid_intersection_popup = False
 
 # ============================================================
-# Utility helpers
+# Utilities
 # ============================================================
 def distance(a, b):
     return math.hypot(a[0] - b[0], a[1] - b[1])
@@ -89,66 +95,89 @@ def to_pixels(meter_point):
     return int(meter_point[0] / SCALE), int(meter_point[1] / SCALE)
 
 
-def wrap_text(text, max_chars):
-    words = text.split()
-    if not words:
-        return [""]
-
-    lines = []
-    current = words[0]
-
-    for word in words[1:]:
-        if len(current) + 1 + len(word) <= max_chars:
-            current += " " + word
-        else:
-            lines.append(current)
-            current = word
-
-    lines.append(current)
-    return lines
+def world_to_screen_loaded(meter_point):
+    return (
+        int(START_POINT[0] + meter_point[0] / SCALE),
+        int(START_POINT[1] + meter_point[1] / SCALE),
+    )
 
 
-def draw_text(text, x, y, color=WHITE, font=FONT):
-    img = font.render(text, True, color)
-    screen.blit(img, (x, y))
+def in_start_circle(pos):
+    return distance(pos, START_POINT) <= ANCHOR_RADIUS
 
 
-def draw_center_text(text, y, color=WHITE, font=BIG_FONT):
-    img = font.render(text, True, color)
-    rect = img.get_rect(center=(WIDTH // 2, y))
-    screen.blit(img, rect)
+def in_end_circle(pos):
+    return distance(pos, END_POINT) <= ANCHOR_RADIUS
 
 
-# ============================================================
-# Track validation
-# ============================================================
-def is_closed(track_points, threshold=CLOSE_THRESHOLD):
-    if len(track_points) < 3:
-        return False
-    return distance(track_points[0], track_points[-1]) < threshold
+def in_anchor_circle(pos):
+    return in_start_circle(pos) or in_end_circle(pos)
 
 
-def auto_close_loop(track_points, threshold=CLOSE_THRESHOLD):
-    if len(track_points) < 3:
-        return track_points, False
-
-    if is_closed(track_points, threshold):
-        if track_points[0] != track_points[-1]:
-            return track_points + [track_points[0]], True
-        return track_points, True
-
-    return track_points, False
+def clear_track():
+    global points, valid, drawing, message, show_invalid_intersection_popup
+    points = []
+    valid = False
+    drawing = False
+    show_invalid_intersection_popup = False
+    message = "Track cleared"
 
 
-def validate_track(track_points):
-    if len(track_points) < 4:
+def build_closed_loop(raw_points):
+    loop = [START_POINT]
+    for pt in raw_points[1:]:
+        loop.append(pt)
+
+    if not loop or loop[-1] != END_POINT:
+        loop.append(END_POINT)
+
+    if loop[-1] != START_POINT:
+        loop.append(START_POINT)
+
+    return loop
+
+
+def strip_anchor_zone_points(loop_points):
+    if len(loop_points) < 3:
+        return loop_points
+
+    cleaned = [loop_points[0]]
+    for pt in loop_points[1:-2]:
+        if not in_anchor_circle(pt):
+            if pt != cleaned[-1]:
+                cleaned.append(pt)
+
+    cleaned.append(END_POINT)
+    cleaned.append(START_POINT)
+
+    deduped = [cleaned[0]]
+    for pt in cleaned[1:]:
+        if pt != deduped[-1]:
+            deduped.append(pt)
+
+    return deduped
+
+
+def validate_track(loop_points):
+    if len(loop_points) < 4:
         return False, "Too few points"
 
-    if track_points[0] != track_points[-1]:
-        return False, "Track not closed"
+    if loop_points[0] != START_POINT:
+        return False, "Track must start at the right start circle"
+
+    if len(loop_points) < 2 or loop_points[-2] != END_POINT:
+        return False, "Track must end at the left end circle"
+
+    if loop_points[-1] != START_POINT:
+        return False, "Track not properly closed"
+
+    filtered_points = strip_anchor_zone_points(loop_points)
+
+    if len(filtered_points) < 4:
+        return False, "Track too short"
 
     try:
-        line = LineString(track_points)
+        line = LineString(filtered_points)
     except Exception:
         return False, "Invalid track geometry"
 
@@ -161,9 +190,27 @@ def validate_track(track_points):
     return True, "Valid track"
 
 
-# ============================================================
-# Path smoothing
-# ============================================================
+def would_create_invalid_intersection(candidate_points):
+    if len(candidate_points) < 4:
+        return False
+
+    filtered = [candidate_points[0]]
+    for pt in candidate_points[1:]:
+        if not in_anchor_circle(pt):
+            if pt != filtered[-1]:
+                filtered.append(pt)
+
+    if len(filtered) < 4:
+        return False
+
+    try:
+        line = LineString(filtered)
+    except Exception:
+        return True
+
+    return not line.is_simple
+
+
 def remove_consecutive_duplicates(track_points):
     if not track_points:
         return []
@@ -190,7 +237,6 @@ def smooth_path(track_points):
     try:
         x = pts[:, 0]
         y = pts[:, 1]
-
         tck, _ = splprep([x, y], s=5, per=True)
         u_new = np.linspace(0, 1, 240)
         x_new, y_new = splev(u_new, tck)
@@ -198,9 +244,7 @@ def smooth_path(track_points):
         smooth_pts = list(zip(x_new, y_new))
         if smooth_pts[0] != smooth_pts[-1]:
             smooth_pts.append(smooth_pts[0])
-
         return smooth_pts
-
     except Exception:
         fallback = [tuple(p) for p in pts]
         if fallback[0] != fallback[-1]:
@@ -209,125 +253,123 @@ def smooth_path(track_points):
 
 
 # ============================================================
-# UI drawing helpers
+# CSV load/save/run
 # ============================================================
-def draw_checkered_flag(x, y, cell=8, rows=4, cols=4):
-    for r in range(rows):
-        for c in range(cols):
-            color = WHITE if (r + c) % 2 == 0 else (30, 30, 30)
-            pygame.draw.rect(screen, color, (x + c * cell, y + r * cell, cell, cell))
-    pygame.draw.rect(screen, LIGHT, (x, y, cols * cell, rows * cell), 1)
+def save_track():
+    global message, selected_csv_path, last_saved_csv_path
 
-
-def draw_button(rect, text, enabled=True, icon=None):
-    mouse = pygame.mouse.get_pos()
-    hovered = rect.collidepoint(mouse)
-
-    if enabled:
-        fill = (55, 55, 55) if not hovered else (75, 75, 75)
-        border = ACCENT if hovered else LIGHT
-        txt = WHITE
-    else:
-        fill = (45, 45, 45)
-        border = DARK
-        txt = DARK
-
-    pygame.draw.rect(screen, fill, rect, border_radius=14)
-    pygame.draw.rect(screen, border, rect, 2, border_radius=14)
-
-    label = FONT.render(text, True, txt)
-    label_rect = label.get_rect(center=rect.center)
-    screen.blit(label, label_rect)
-
-    if icon == "save":
-        pygame.draw.rect(screen, txt, (rect.x + 16, rect.y + 12, 14, 18), 2, border_radius=2)
-        pygame.draw.rect(screen, txt, (rect.x + 19, rect.y + 15, 8, 5))
-    elif icon == "clear":
-        pygame.draw.line(screen, txt, (rect.x + 15, rect.y + 14), (rect.x + 28, rect.y + 27), 3)
-        pygame.draw.line(screen, txt, (rect.x + 28, rect.y + 14), (rect.x + 15, rect.y + 27), 3)
-
-
-def draw_grid():
-    for x in range(DRAW_X, DRAW_X + DRAW_W, 32):
-        pygame.draw.line(screen, GRID, (x, DRAW_Y), (x, DRAW_Y + DRAW_H))
-    for y in range(DRAW_Y, DRAW_Y + DRAW_H, 32):
-        pygame.draw.line(screen, GRID, (DRAW_X, y), (DRAW_X + DRAW_W, y))
-
-
-def draw_track_area():
-    pygame.draw.rect(screen, (24, 24, 24), DRAW_RECT, border_radius=18)
-    pygame.draw.rect(screen, (60, 60, 60), DRAW_RECT, 2, border_radius=18)
-    draw_grid()
-
-    stripe_w = 18
-    for i in range(10):
-        color = WHITE if i % 2 == 0 else (30, 30, 30)
-        pygame.draw.rect(screen, color, (DRAW_X + 20 + i * stripe_w, DRAW_Y + 8, stripe_w, 10))
-
-
-def draw_side_panel():
-    pygame.draw.rect(screen, PANEL, (0, 0, LEFT_PANEL_W, HEIGHT))
-    pygame.draw.rect(screen, PANEL_2, (0, 0, LEFT_PANEL_W, 100))
-    pygame.draw.line(screen, (55, 55, 55), (LEFT_PANEL_W, 0), (LEFT_PANEL_W, HEIGHT), 2)
-
-    draw_checkered_flag(28, 24)
-    draw_text("TRACK DESIGNER", 75, 24, WHITE, TITLE_FONT)
-    draw_text("Race Edition", 78, 62, ACCENT, SUBTITLE_FONT)
-
-    draw_text("Instructions", 35, 130, WHITE, SUBTITLE_FONT)
-    draw_text("• Hold mouse and draw track", 35, 165, LIGHT, SMALL_FONT)
-    draw_text("• End near start to auto-close", 35, 192, LIGHT, SMALL_FONT)
-    draw_text(f"• Close threshold: {CLOSE_THRESHOLD}px", 35, 219, LIGHT, SMALL_FONT)
-    draw_text(f"• Scale: 1 px = {SCALE:.1f} m", 35, 246, LIGHT, SMALL_FONT)
-    draw_text(f"• Cone spacing: {MIN_CONE_SPACING_M:.1f} m", 35, 273, LIGHT, SMALL_FONT)
-
-    draw_text("Status", 35, 330, WHITE, SUBTITLE_FONT)
-
-    badge_color = GREEN if valid else ORANGE if len(points) > 1 else DARK
-    badge_text = "VALID" if valid else "DRAWING" if len(points) > 1 else "IDLE"
-
-    pygame.draw.rect(screen, badge_color, (35, 364, 110, 34), border_radius=10)
-    draw_text(badge_text, 62, 371, (15, 15, 15), SMALL_FONT)
-
-    draw_text("Message", 35, 430, WHITE, SUBTITLE_FONT)
-    wrapped = wrap_text(message, 28)
-    y = 466
-    for line in wrapped[:5]:
-        draw_text(line, 35, y, LIGHT, SMALL_FONT)
-        y += 24
-
-    draw_button(SAVE_BUTTON, "Save CSV", enabled=valid, icon="save")
-    draw_button(CLEAR_BUTTON, "Clear Track", enabled=True, icon="clear")
-
-    draw_text("Formula Student style preview", 35, 700, DARK, SMALL_FONT)
-
-
-def draw_track(track_points, is_valid, currently_drawing):
-    if len(track_points) < 2:
+    if not valid:
+        message = "Cannot save invalid track"
         return
 
-    pygame.draw.lines(screen, (20, 20, 20), False, track_points, 12)
+    suggested_dir = os.path.dirname(selected_csv_path) if selected_csv_path else os.getcwd()
+    save_path = filedialog.asksaveasfilename(
+        title="Save track CSV",
+        initialdir=suggested_dir,
+        initialfile="track.csv",
+        defaultextension=".csv",
+        filetypes=[("CSV files", "*.csv")],
+    )
 
-    base_color = GREEN if is_valid else RED
-    pygame.draw.lines(screen, base_color, False, track_points, 4)
-
-    pygame.draw.circle(screen, WHITE, track_points[0], 6)
-    pygame.draw.circle(screen, ACCENT, track_points[0], 12, 2)
-    pygame.draw.circle(screen, LIGHT, track_points[-1], 4)
-
-    if currently_drawing and len(track_points) > 2:
-        pygame.draw.circle(screen, BLUE, track_points[0], CLOSE_THRESHOLD, 1)
-        if distance(track_points[0], track_points[-1]) < CLOSE_THRESHOLD:
-            pygame.draw.circle(screen, GREEN, track_points[0], CLOSE_THRESHOLD, 2)
-
-
-def draw_preview_cones():
-    if not valid:
+    if not save_path:
+        message = "Save cancelled"
         return
 
     smooth_pixels = smooth_path(points)
     track_m = to_meters(smooth_pixels)
 
+    blue_cones, yellow_cones, orange_cones = generate_all_cones(track_m)
+
+    if not blue_cones or not yellow_cones:
+        message = "Track too tight or invalid for cone export"
+        return
+
+    export_csv(save_path, blue_cones, yellow_cones, orange_cones)
+    selected_csv_path = save_path
+    last_saved_csv_path = save_path
+    message = f"Saved CSV: {os.path.basename(save_path)}"
+
+
+def load_csv():
+    global selected_csv_path, loaded_csv_cones, message, points, valid, drawing, show_invalid_intersection_popup
+
+    load_path = filedialog.askopenfilename(
+        title="Load existing FSDS CSV",
+        initialdir=os.getcwd(),
+        filetypes=[("CSV files", "*.csv")],
+    )
+
+    if not load_path:
+        message = "Load cancelled"
+        return
+
+    blue, yellow, orange = [], [], []
+
+    try:
+        with open(load_path, "r", newline="") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if not row or len(row) < 3:
+                    continue
+
+                tag = row[0].strip()
+                try:
+                    x = float(row[1])
+                    y = float(row[2])
+                except ValueError:
+                    continue
+
+                if tag == "blue":
+                    blue.append((x, y))
+                elif tag == "yellow":
+                    yellow.append((x, y))
+                elif tag == "big_orange":
+                    orange.append((x, y))
+
+    except Exception as exc:
+        message = f"Failed to load CSV: {exc}"
+        return
+
+    loaded_csv_cones = {"blue": blue, "yellow": yellow, "orange": orange}
+    selected_csv_path = load_path
+
+    points = []
+    valid = False
+    drawing = False
+    show_invalid_intersection_popup = False
+    message = f"Loaded CSV: {os.path.basename(load_path)}"
+
+
+def can_run_fsds():
+    return bool(selected_csv_path and os.path.isfile(selected_csv_path) and os.path.isfile(FSDS_EXE_PATH))
+
+
+def run_fsds_with_selected_csv():
+    global message
+
+    if not can_run_fsds():
+        message = "Run unavailable. Save or load a CSV first, and check FSDS.exe path."
+        return
+
+    try:
+        subprocess.Popen(
+            [FSDS_EXE_PATH, f'-CustomMapPath={selected_csv_path}'],
+            cwd=os.path.dirname(FSDS_EXE_PATH),
+        )
+        message = f"Launching FSDS with {os.path.basename(selected_csv_path)}"
+    except Exception as exc:
+        message = f"Failed to run FSDS: {exc}"
+
+
+# ============================================================
+# Drawing / Preview
+# ============================================================
+def draw_preview_cones_from_current_track():
+    if not valid:
+        return
+
+    smooth_pixels = smooth_path(points)
+    track_m = to_meters(smooth_pixels)
     blue_cones, yellow_cones, orange_cones = generate_all_cones(track_m)
 
     for p in blue_cones:
@@ -346,136 +388,127 @@ def draw_preview_cones():
         pygame.draw.circle(screen, WHITE, px, 7, 1)
 
 
-# ============================================================
-# Actions
-# ============================================================
-def clear_track():
-    global points, valid, drawing, message
-    points = []
-    valid = False
-    drawing = False
-    message = "Track cleared"
-
-
-def save_track():
-    global message
-
-    if not valid:
-        message = "Cannot save invalid track"
+def draw_loaded_csv_preview():
+    if points:
         return
 
-    smooth_pixels = smooth_path(points)
-    track_m = to_meters(smooth_pixels)
+    for p in loaded_csv_cones["blue"]:
+        px = world_to_screen_loaded(p)
+        pygame.draw.circle(screen, BLUE, px, 5)
+        pygame.draw.circle(screen, WHITE, px, 5, 1)
 
-    blue_cones, yellow_cones, orange_cones = generate_all_cones(track_m)
+    for p in loaded_csv_cones["yellow"]:
+        px = world_to_screen_loaded(p)
+        pygame.draw.circle(screen, YELLOW, px, 5)
+        pygame.draw.circle(screen, WHITE, px, 5, 1)
 
-    if not blue_cones or not yellow_cones:
-        message = "Track too tight or invalid for cone export"
-        return
-
-    export_csv("../track.csv", blue_cones, yellow_cones, orange_cones)
-    message = "Track saved successfully as track.csv"
-
-
-# ============================================================
-# Loading screen
-# ============================================================
-def show_loading_screen(duration_ms=1500):
-    start_time = pygame.time.get_ticks()
-
-    while pygame.time.get_ticks() - start_time < duration_ms:
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                pygame.quit()
-                raise SystemExit
-
-        screen.fill((10, 10, 10))
-
-        for i in range(0, WIDTH, 80):
-            pygame.draw.line(screen, (25, 25, 25), (i, 0), (i - 200, HEIGHT), 2)
-
-        draw_center_text("TRACK DESIGNER", HEIGHT // 2 - 80, WHITE, BIG_FONT)
-        draw_center_text("Race Edition", HEIGHT // 2 - 20, ACCENT, TITLE_FONT)
-
-        elapsed = pygame.time.get_ticks() - start_time
-        progress = min(elapsed / duration_ms, 1.0)
-
-        bar_w = 420
-        bar_h = 24
-        bar_x = WIDTH // 2 - bar_w // 2
-        bar_y = HEIGHT // 2 + 60
-
-        pygame.draw.rect(screen, (45, 45, 45), (bar_x, bar_y, bar_w, bar_h), border_radius=12)
-        pygame.draw.rect(screen, ACCENT, (bar_x, bar_y, int(bar_w * progress), bar_h), border_radius=12)
-        pygame.draw.rect(screen, LIGHT, (bar_x, bar_y, bar_w, bar_h), 2, border_radius=12)
-
-        draw_center_text("Initializing racing surface...", HEIGHT // 2 + 130, LIGHT, SUBTITLE_FONT)
-
-        cx = WIDTH // 2 - 22
-        cy = HEIGHT // 2 - 170
-        draw_checkered_flag(cx, cy, cell=11, rows=4, cols=4)
-
-        pygame.display.flip()
-        clock.tick(60)
+    for p in loaded_csv_cones["orange"]:
+        px = world_to_screen_loaded(p)
+        pygame.draw.circle(screen, ORANGE, px, 7)
+        pygame.draw.circle(screen, WHITE, px, 7, 1)
 
 
 # ============================================================
-# Main loop
+# Main
 # ============================================================
 def main():
-    global points, drawing, valid, message
+    global points, drawing, valid, message, show_invalid_intersection_popup
 
-    show_loading_screen(3000)
+    draw_loading_screen(screen, fonts, WIDTH, HEIGHT, 500, clock)
 
     running = True
     while running:
         screen.fill(BG)
+        popup_clear_rect = None
 
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 running = False
 
-            elif event.type == pygame.MOUSEBUTTONDOWN:
+            if show_invalid_intersection_popup:
+                if event.type == pygame.MOUSEBUTTONDOWN:
+                    mouse_pos = pygame.mouse.get_pos()
+                    if popup_clear_rect and popup_clear_rect.collidepoint(mouse_pos):
+                        clear_track()
+                continue
+
+            if event.type == pygame.MOUSEBUTTONDOWN:
                 mouse_pos = pygame.mouse.get_pos()
 
-                if SAVE_BUTTON.collidepoint(mouse_pos):
+                if layout["SAVE_BUTTON"].collidepoint(mouse_pos):
                     save_track()
 
-                elif CLEAR_BUTTON.collidepoint(mouse_pos):
+                elif layout["LOAD_BUTTON"].collidepoint(mouse_pos):
+                    load_csv()
+
+                elif layout["RUN_BUTTON"].collidepoint(mouse_pos):
+                    run_fsds_with_selected_csv()
+
+                elif layout["CLEAR_BUTTON"].collidepoint(mouse_pos):
                     clear_track()
 
                 elif DRAW_RECT.collidepoint(mouse_pos):
-                    drawing = True
-                    points = []
-                    valid = False
-                    message = "Drawing track..."
+                    if in_start_circle(mouse_pos):
+                        drawing = True
+                        points = [START_POINT]
+                        valid = False
+                        message = "Drawing track from forced start..."
+                    else:
+                        message = "You must start inside the right start circle"
 
             elif event.type == pygame.MOUSEBUTTONUP:
                 if drawing:
                     drawing = False
-                    closed_points, was_closed = auto_close_loop(points)
+                    mouse_pos = pygame.mouse.get_pos()
 
-                    if not was_closed:
+                    if not in_end_circle(mouse_pos):
                         valid = False
-                        message = "Track not closed. End closer to the start."
+                        message = "Track must end inside the left end circle"
                     else:
-                        points = closed_points
-                        valid, message = validate_track(points)
+                        if points[-1] != END_POINT:
+                            points.append(END_POINT)
+
+                        closed_points = build_closed_loop(points)
+                        valid, message = validate_track(closed_points)
+
+                        if valid:
+                            points = closed_points
 
             elif event.type == pygame.MOUSEMOTION and drawing:
                 pos = pygame.mouse.get_pos()
 
                 if DRAW_RECT.collidepoint(pos):
-                    if not points:
-                        points.append(pos)
-                    else:
-                        if distance(points[-1], pos) >= 2:
+                    if distance(points[-1], pos) >= 2:
+                        candidate = points + [pos]
+
+                        if would_create_invalid_intersection(candidate):
+                            drawing = False
+                            valid = False
+                            show_invalid_intersection_popup = True
+                            message = "Invalid path. Clear track and redraw without intersection."
+                        else:
                             points.append(pos)
 
-        draw_side_panel()
-        draw_track_area()
-        draw_track(points, valid, drawing)
-        draw_preview_cones()
+        draw_side_panel(
+            screen=screen,
+            layout=layout,
+            fonts=fonts,
+            message=message,
+            valid=valid,
+            points_count=len(points),
+            scale=SCALE,
+            cone_spacing_m=MIN_CONE_SPACING_M,
+            selected_csv_path=selected_csv_path,
+            can_run_fsds=can_run_fsds(),
+        )
+
+        draw_track_area(screen, DRAW_RECT)
+        draw_track(screen, points, valid, drawing, START_POINT, END_POINT, ANCHOR_RADIUS, fonts)
+        draw_preview_cones_from_current_track()
+        draw_loaded_csv_preview()
+
+        if show_invalid_intersection_popup:
+            popup_clear_rect = draw_invalid_popup(screen, fonts, WIDTH, HEIGHT)
 
         pygame.display.flip()
         clock.tick(60)
