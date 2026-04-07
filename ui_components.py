@@ -42,17 +42,17 @@ def build_layout(width, height, left_panel_w=300):
     draw_w = width - left_panel_w - 40
     draw_h = height - 40
 
-    layout = {
+    return {
         "WIDTH": width,
         "HEIGHT": height,
         "LEFT_PANEL_W": left_panel_w,
         "DRAW_RECT": pygame.Rect(draw_x, draw_y, draw_w, draw_h),
-        "SAVE_BUTTON": pygame.Rect(35, 520, 230, 42),
-        "LOAD_BUTTON": pygame.Rect(35, 570, 230, 42),
-        "RUN_BUTTON": pygame.Rect(35, 620, 230, 42),
-        "CLEAR_BUTTON": pygame.Rect(35, 670, 230, 42),
+        "SAVE_BUTTON": pygame.Rect(35, 500, 230, 40),
+        "LOAD_BUTTON": pygame.Rect(35, 548, 230, 40),
+        "RUN_BUTTON": pygame.Rect(35, 596, 230, 40),
+        "RAMSE_BUTTON": pygame.Rect(35, 644, 230, 40),
+        "CLEAR_BUTTON": pygame.Rect(35, 692, 230, 40),
     }
-    return layout
 
 
 # ============================================================
@@ -65,7 +65,6 @@ def wrap_text(text, max_chars):
 
     lines = []
     current = words[0]
-
     for word in words[1:]:
         if len(current) + 1 + len(word) <= max_chars:
             current += " " + word
@@ -127,6 +126,8 @@ def draw_button(screen, rect, text, font, enabled=True, icon=None):
     elif icon == "clear":
         pygame.draw.line(screen, txt, (rect.x + 15, rect.y + 12), (rect.x + 28, rect.y + 25), 3)
         pygame.draw.line(screen, txt, (rect.x + 28, rect.y + 12), (rect.x + 15, rect.y + 25), 3)
+    elif icon == "rocket":
+        pygame.draw.polygon(screen, txt, [(rect.x + 22, rect.y + 8), (rect.x + 29, rect.y + 18), (rect.x + 22, rect.y + 30), (rect.x + 15, rect.y + 18)])
 
 
 def draw_grid(screen, draw_rect):
@@ -177,23 +178,23 @@ def draw_side_panel(
     draw_text(screen, f"• Scale: 1 px = {scale:.2f} m", 35, 255, fonts["small"], LIGHT)
     draw_text(screen, f"• Cone spacing: {cone_spacing_m:.2f} m", 35, 280, fonts["small"], LIGHT)
 
-    draw_text(screen, "Status", 35, 330, fonts["subtitle"], WHITE)
+    draw_text(screen, "Status", 35, 325, fonts["subtitle"], WHITE)
     badge_color = GREEN if valid else ORANGE if points_count > 1 else DARK
     badge_text = "VALID" if valid else "DRAWING" if points_count > 1 else "IDLE"
-    pygame.draw.rect(screen, badge_color, (35, 365, 110, 34), border_radius=10)
-    draw_text(screen, badge_text, 62, 372, fonts["small"], (15, 15, 15))
+    pygame.draw.rect(screen, badge_color, (35, 360, 110, 34), border_radius=10)
+    draw_text(screen, badge_text, 62, 367, fonts["small"], (15, 15, 15))
 
-    draw_text(screen, "Message", 35, 420, fonts["subtitle"], WHITE)
+    draw_text(screen, "Message", 35, 410, fonts["subtitle"], WHITE)
     wrapped = wrap_text(message, 30)
-    yy = 455
+    yy = 445
     for line in wrapped[:4]:
         draw_text(screen, line, 35, yy, fonts["small"], LIGHT)
         yy += 22
 
-    draw_text(screen, "Selected CSV", 35, 480, fonts["subtitle"], WHITE)
+    draw_text(screen, "Selected CSV", 35, 475, fonts["subtitle"], WHITE)
     selected_display = selected_csv_path if selected_csv_path else "None"
     selected_lines = wrap_text(selected_display, 28)
-    yy = 510
+    yy = 505
     for line in selected_lines[:2]:
         draw_text(screen, line, 35, yy, fonts["small"], DARK if not selected_csv_path else LIGHT)
         yy += 20
@@ -201,6 +202,7 @@ def draw_side_panel(
     draw_button(screen, layout["SAVE_BUTTON"], "Save CSV", fonts["font"], enabled=valid, icon="save")
     draw_button(screen, layout["LOAD_BUTTON"], "Load CSV", fonts["font"], enabled=True, icon="load")
     draw_button(screen, layout["RUN_BUTTON"], "Run FSDS", fonts["font"], enabled=can_run_fsds, icon="run")
+    draw_button(screen, layout["RAMSE_BUTTON"], "Try RAMS-e", fonts["font"], enabled=True, icon="rocket")
     draw_button(screen, layout["CLEAR_BUTTON"], "Clear Track", fonts["font"], enabled=True, icon="clear")
 
 
@@ -263,7 +265,6 @@ def draw_loading_screen(screen, fonts, width, height, duration_ms, clock):
         pygame.draw.rect(screen, LIGHT, (bar_x, bar_y, bar_w, bar_h), 2, border_radius=12)
 
         draw_center_text(screen, "Initializing racing surface...", height // 2 + 130, fonts["subtitle"], width, LIGHT)
-
         draw_checkered_flag(screen, width // 2 - 22, height // 2 - 170, cell=11, rows=4, cols=4)
 
         pygame.display.flip()
