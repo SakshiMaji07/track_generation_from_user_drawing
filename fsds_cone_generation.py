@@ -1,13 +1,13 @@
 import math
+from typing import List, Tuple
+
 import numpy as np
 
+Point2D = Tuple[float, float]
 
-# ============================================================
-# Configuration
-# ============================================================
 PIXEL_RADIUS = 15
 METERS_PER_PIXEL = 0.1
-MIN_CONE_SPACING = PIXEL_RADIUS * METERS_PER_PIXEL   # 3.0 m
+MIN_CONE_SPACING = PIXEL_RADIUS * METERS_PER_PIXEL
 
 TRACK_WIDTH = 3.0
 HALF_TRACK_WIDTH = TRACK_WIDTH / 2.0
@@ -15,26 +15,20 @@ CONE_STEP = 2.0
 
 START_GATE_BACK_OFFSET = 1.5
 START_GATE_FORWARD_OFFSET = 1.5
-
-# Radius around the start center where blue/yellow are cleared
 START_CLEAR_RADIUS = 3.0
 
 
-# ============================================================
-# Basic helpers
-# ============================================================
-def distance(a, b):
+def distance(a: Point2D, b: Point2D) -> float:
     return math.hypot(a[0] - b[0], a[1] - b[1])
 
 
-def as_tuple(pt):
+def as_tuple(pt) -> Point2D:
     return float(pt[0]), float(pt[1])
 
 
 def remove_duplicate_points(points, eps=1e-9):
     if not points:
         return []
-
     cleaned = [as_tuple(points[0])]
     for pt in points[1:]:
         pt = as_tuple(pt)
@@ -47,10 +41,8 @@ def ensure_closed(points, eps=1e-9):
     pts = remove_duplicate_points(points, eps=eps)
     if len(pts) < 3:
         return pts
-
     if distance(pts[0], pts[-1]) > eps:
         pts.append(pts[0])
-
     return pts
 
 
@@ -98,14 +90,9 @@ def interpolate_on_polyline(points, s):
 
     p0 = np.array(pts[-2], dtype=float)
     p1 = np.array(pts[-1], dtype=float)
-
     tangent = p1 - p0
     tangent_norm = np.linalg.norm(tangent)
-    if tangent_norm <= 1e-9:
-        tangent = np.array([1.0, 0.0], dtype=float)
-    else:
-        tangent = tangent / tangent_norm
-
+    tangent = np.array([1.0, 0.0], dtype=float) if tangent_norm <= 1e-9 else tangent / tangent_norm
     return as_tuple(p1), tangent
 
 
@@ -114,10 +101,7 @@ def offset_point(center, tangent, offset):
     normal = np.array([-ty, tx], dtype=float)
 
     normal_norm = np.linalg.norm(normal)
-    if normal_norm <= 1e-9:
-        normal = np.array([0.0, 1.0], dtype=float)
-    else:
-        normal = normal / normal_norm
+    normal = np.array([0.0, 1.0], dtype=float) if normal_norm <= 1e-9 else normal / normal_norm
 
     c = np.array(center, dtype=float)
     p = c + offset * normal
@@ -155,9 +139,6 @@ def sample_centerline(points, step):
     return samples, tangents, total
 
 
-# ============================================================
-# Start helpers
-# ============================================================
 def get_start_reference(track_points_m):
     pts = ensure_closed(track_points_m)
     if len(pts) < 4:
@@ -172,11 +153,7 @@ def get_start_reference(track_points_m):
     start_tangent = np.array(tangents[0], dtype=float)
 
     tangent_norm = np.linalg.norm(start_tangent)
-    if tangent_norm <= 1e-9:
-        start_tangent = np.array([1.0, 0.0], dtype=float)
-    else:
-        start_tangent = start_tangent / tangent_norm
-
+    start_tangent = np.array([1.0, 0.0], dtype=float) if tangent_norm <= 1e-9 else start_tangent / tangent_norm
     return start_center, start_tangent
 
 
@@ -188,13 +165,7 @@ def clear_points_near_reference(points, references, clear_radius):
     return kept
 
 
-# ============================================================
-# Cone generation
-# ============================================================
 def generate_start_cones(track_points_m):
-    """
-    Force a 4-cone orange start gate.
-    """
     start_center, start_tangent = get_start_reference(track_points_m)
     if start_center is None:
         return []
@@ -208,16 +179,10 @@ def generate_start_cones(track_points_m):
         offset_point(front_center, start_tangent, +HALF_TRACK_WIDTH),
         offset_point(front_center, start_tangent, -HALF_TRACK_WIDTH),
     ]
-
-    # Only dedupe orange against orange itself
-    orange = filter_spacing(orange_raw, MIN_CONE_SPACING)
-    return orange
+    return filter_spacing(orange_raw, MIN_CONE_SPACING)
 
 
 def generate_cones(track_points_m):
-    """
-    Generate normal blue/yellow cones without enforcing the start gate.
-    """
     pts = ensure_closed(track_points_m)
     if len(pts) < 4:
         return [], []
@@ -227,7 +192,6 @@ def generate_cones(track_points_m):
         return [], []
 
     centers, tangents, _ = sampled
-
     left_side = []
     right_side = []
 
@@ -238,7 +202,6 @@ def generate_cones(track_points_m):
     blue = filter_spacing(left_side, MIN_CONE_SPACING)
     yellow = filter_spacing(right_side, MIN_CONE_SPACING)
 
-    # Cross-side cleanup
     blue_final = []
     yellow_final = []
 
@@ -254,14 +217,6 @@ def generate_cones(track_points_m):
 
 
 def generate_all_cones(track_points_m):
-    """
-    Correct order:
-    1. Generate blue/yellow
-    2. Force orange start gate
-    3. Clear blue/yellow around start center
-    4. Clear blue/yellow around orange cones
-    5. Return orange unchanged
-    """
     blue, yellow = generate_cones(track_points_m)
     orange = generate_start_cones(track_points_m)
 

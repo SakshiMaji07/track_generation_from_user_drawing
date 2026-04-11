@@ -1,27 +1,24 @@
-import numpy as np
+import math
+from typing import List, Tuple
 
-OFFSET = 1.5  # meters
-
-
-def distance(p1, p2):
-    return np.linalg.norm(np.array(p1) - np.array(p2))
+Point2D = Tuple[float, float]
+OFFSET = 1.5
 
 
-def get_normal(p1, p2):
+def distance(p1: Point2D, p2: Point2D) -> float:
+    return math.hypot(p1[0] - p2[0], p1[1] - p2[1])
+
+
+def get_normal(p1: Point2D, p2: Point2D) -> Point2D:
     dx = p2[0] - p1[0]
     dy = p2[1] - p1[1]
-
-    length = np.sqrt(dx * dx + dy * dy)
-    if length == 0:
-        return (0, 0)
-
-    nx = -dy / length
-    ny = dx / length
-
-    return (nx, ny)
+    length = math.hypot(dx, dy)
+    if length <= 1e-9:
+        return (0.0, 0.0)
+    return (-dy / length, dx / length)
 
 
-def generate_cones(track):
+def generate_cones(track: List[Point2D]):
     blue_cones = []
     yellow_cones = []
 
@@ -38,11 +35,13 @@ def generate_cones(track):
     return blue_cones, yellow_cones
 
 
-def generate_start_cones(track):
+def generate_start_cones(track: List[Point2D]):
+    if len(track) < 2:
+        return []
     p = track[0]
     n = get_normal(track[0], track[1])
 
     return [
-        (p[0] + 2 * n[0], p[1] + 2 * n[1]),
-        (p[0] - 2 * n[0], p[1] - 2 * n[1]),
+        (p[0] + 2.0 * n[0], p[1] + 2.0 * n[1]),
+        (p[0] - 2.0 * n[0], p[1] - 2.0 * n[1]),
     ]

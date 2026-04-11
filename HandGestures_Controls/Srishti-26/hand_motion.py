@@ -96,7 +96,7 @@ def send_to_vehicle(smoothed_angle, gas_amount, brake_amount):
     brake = brake_amount
 
     car_controls = fsds.CarControls()
-    car_controls.steering = -steering * 1.2
+    car_controls.steering = steering * 1.2
     car_controls.throttle = throttle
     car_controls.brake = brake
 
