@@ -1,6 +1,7 @@
 import os
 import sys
 import time
+import shlex
 import subprocess
 from dataclasses import dataclass
 from typing import Optional, Tuple
@@ -19,12 +20,12 @@ class FSDSClientAdapter:
     Python-only FSDS adapter.
     No ROS.
 
-    Human mode:
-    - telemetry only
-    - keyboard/manual control remains usable
-
-    RAMS-e mode:
-    - API control enabled
+    Key fixes:
+    - simulator launches in a separate console
+    - connection is NON-BLOCKING from pygame's perspective
+    - human mode keeps keyboard/manual driving enabled
+    - RAMS-e mode enables API control
+    - simulator closure is detectable
     """
 
     def __init__(
@@ -41,10 +42,15 @@ class FSDSClientAdapter:
         self.custom_map_cli_template = custom_map_cli_template
         self.startup_timeout_s = startup_timeout_s
 
+        self.fsds = None
         self.client = None
         self.process = None
+
         self.connected = False
         self.api_control_enabled = False
+        self.pending_connection = False
+        self.connection_start_time = None
+        self.enable_api_control_on_connect = False
 
         self._cone_hits = 0
         self._last_collision_stamp = None
@@ -66,46 +72,78 @@ class FSDSClientAdapter:
 
         if self.custom_map_cli_template:
             extra = self.custom_map_cli_template.format(csv_path=csv_path)
-            cmd += extra.split()
+            cmd += shlex.split(extra, posix=False)
 
         print("FSDS launch command:", cmd)
         return cmd
 
-    def start_run(self, csv_path: str, enable_api_control: bool = False):
+    def launch_simulator(self, csv_path: str, enable_api_control: bool = False):
+        """
+        Launch the simulator in a separate console and begin deferred connection.
+        This returns immediately.
+        """
         if self.process is None or self.process.poll() is not None:
             cmd = self._build_launch_cmd(csv_path)
-            self.process = subprocess.Popen(cmd)
 
-        self._connect_client(enable_api_control=enable_api_control)
+            creationflags = 0
+            if os.name == "nt":
+                creationflags = subprocess.CREATE_NEW_CONSOLE
+
+            self.process = subprocess.Popen(
+                cmd,
+                creationflags=creationflags,
+                cwd=os.path.dirname(self.simulator_exe_path) or None,
+            )
+
+        self.connected = False
+        self.client = None
+        self.pending_connection = True
+        self.connection_start_time = time.time()
+        self.enable_api_control_on_connect = enable_api_control
+
         self._cone_hits = 0
         self._last_collision_stamp = None
         self._last_collision_name = None
 
-    def _connect_client(self, enable_api_control: bool):
-        start = time.time()
-        while time.time() - start < self.startup_timeout_s:
-            try:
-                client = self.fsds.FSDSClient()
-                client.confirmConnection()
+    def try_connect(self):
+        """
+        Non-blocking-ish connection attempt.
+        Call this repeatedly from the pygame loop.
+        """
+        if self.connected:
+            return True
 
-                # Human mode should not steal keyboard/manual control
-                if enable_api_control:
-                    client.enableApiControl(True)
-                    self.api_control_enabled = True
-                else:
-                    try:
-                        client.enableApiControl(False)
-                    except Exception:
-                        pass
-                    self.api_control_enabled = False
+        if not self.pending_connection:
+            return False
 
-                self.client = client
-                self.connected = True
-                return
-            except Exception:
-                time.sleep(0.5)
+        if self.process is not None and self.process.poll() is not None:
+            self.pending_connection = False
+            return False
 
-        raise RuntimeError("Could not connect to FSDS Python API within timeout.")
+        if time.time() - self.connection_start_time > self.startup_timeout_s:
+            self.pending_connection = False
+            return False
+
+        try:
+            client = self.fsds.FSDSClient()
+            client.confirmConnection()
+
+            if self.enable_api_control_on_connect:
+                client.enableApiControl(True)
+                self.api_control_enabled = True
+            else:
+                try:
+                    client.enableApiControl(False)
+                except Exception:
+                    pass
+                self.api_control_enabled = False
+
+            self.client = client
+            self.connected = True
+            self.pending_connection = False
+            return True
+        except Exception:
+            return False
 
     def _update_cone_hits(self):
         if self.client is None:
@@ -138,7 +176,7 @@ class FSDSClientAdapter:
             self._last_collision_name = obj_name
 
     def poll(self) -> Optional[TelemetryFrame]:
-        if self.client is None:
+        if self.client is None or not self.connected:
             return None
 
         try:
@@ -160,6 +198,9 @@ class FSDSClientAdapter:
     def is_connected(self):
         return self.connected
 
+    def is_sim_alive(self):
+        return self.process is not None and self.process.poll() is None
+
     def stop(self):
         if self.client is not None:
             try:
@@ -167,5 +208,7 @@ class FSDSClientAdapter:
             except Exception:
                 pass
 
-        self.api_control_enabled = False
+        self.client = None
         self.connected = False
+        self.pending_connection = False
+        self.api_control_enabled = False

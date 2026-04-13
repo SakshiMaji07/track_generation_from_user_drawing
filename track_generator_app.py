@@ -4,6 +4,7 @@ import hashlib
 import json
 import tkinter as tk
 from tkinter import filedialog, simpledialog
+import pathlib
 
 import pygame
 
@@ -29,7 +30,6 @@ from ui_components import (
 )
 from validate import validate_track, LapValidator, point_in_circle
 
-import pathlib
 
 # ============================================================
 # CONFIGURE THESE FOR YOUR SYSTEM
@@ -38,8 +38,6 @@ FSDS_PYTHON_PATH = str(pathlib.Path(__file__).parent / "fsds")
 FSDS_SIMULATOR_EXE = str(pathlib.Path(__file__).parent.parent / "fsds-v2.2.0-windows/FSDS.exe")
 FSDS_SETTINGS_JSON = str(pathlib.Path(__file__).parent.parent / "fsds-v2.2.0-windows/settings.json")
 FSDS_CUSTOM_MAP_TEMPLATE = '-CustomMapPath="{csv_path}"'
-
-
 # ============================================================
 
 pygame.init()
@@ -92,6 +90,9 @@ preview_blue = []
 preview_yellow = []
 preview_orange = []
 
+live_run = None
+live_driver_name = "Pending"
+
 
 def map_fingerprint(track_points_m, blue, yellow, orange):
     payload = {
@@ -113,7 +114,6 @@ def recalc_ui():
     if len(sparks) < 10:
         sparks[:] = make_sparks(width, height, count=26)
 
-    # UI can resize, but track points are NOT rescaled.
     anchor_radius = max(20, int(min(width, height) * 0.018))
     draw_rect = layout["DRAW_RECT"]
 
@@ -194,16 +194,13 @@ def load_csv():
 
 def start_fsds_run(source="Human"):
     global message, current_run_active, current_run_source, show_leaderboard
-    global lap_validator, telemetry_status
+    global lap_validator, telemetry_status, live_run, live_driver_name
 
     if not selected_csv_path:
         message = "Save or load a CSV first."
         return
 
-    # If user loaded a CSV but did not draw a valid track in this session,
-    # allow launch anyway. Leaderboard validation only works when we have track points.
     use_validator = is_valid and len(track_points) >= 4
-
     if use_validator:
         track_points_m = [(x * METERS_PER_PIXEL, y * METERS_PER_PIXEL) for x, y in track_points]
         try:
@@ -216,41 +213,105 @@ def start_fsds_run(source="Human"):
         lap_validator = None
 
     try:
-        # Human = keep keyboard/manual driving alive
-        # RAMS-e = allow API control
         enable_api = (source == "RAMS-e")
-        fsds.start_run(selected_csv_path, enable_api_control=enable_api)
-        telemetry_status = "Connected"
+        fsds.launch_simulator(selected_csv_path, enable_api_control=enable_api)
+        telemetry_status = "Launching"
     except Exception as e:
         telemetry_status = "Disconnected"
-        message = f"FSDS launch/connect failed: {e}"
+        message = f"FSDS launch failed: {e}"
         return
 
     current_run_active = True
     current_run_source = source
     show_leaderboard = True
+    live_driver_name = "Pending"
+
+    live_run = {
+        "player_name": live_driver_name,
+        "source": source,
+        "lap_time_s": 0.0,
+        "cone_hits": 0,
+        "is_live": True,
+    }
 
     if lap_validator is None:
-        message = f"{source} run launched. Telemetry connected. No drawn-track validator active for loaded CSV-only session."
+        message = f"{source} run launched. Waiting for simulator connection."
     else:
-        message = f"{source} run launched. Waiting for lap..."
+        message = f"{source} run launched. Waiting for simulator connection and lap start."
+
+
+def finalize_run(save_result: bool, final_message: str):
+    global current_run_active, telemetry_status, message, show_leaderboard, live_run, live_driver_name
+
+    if save_result and lap_validator is not None and live_run is not None:
+        lap_time = lap_validator.get_lap_time()
+        summary = lap_validator.get_summary()
+
+        name = simpledialog.askstring("Lap Complete", "Enter driver name:")
+        if not name:
+            name = "Anonymous"
+
+        live_driver_name = name
+        live_run["player_name"] = name
+        live_run["lap_time_s"] = float(lap_time or 0.0)
+        live_run["cone_hits"] = int(summary["cone_hits"])
+        live_run["is_live"] = False
+
+        db.insert_lap(
+            map_hash=current_map_hash,
+            map_name=selected_map_name,
+            player_name=name,
+            source=current_run_source,
+            lap_time_s=float(lap_time or 0.0),
+            cone_hits=int(summary["cone_hits"]),
+            checkpoints_passed=summary["checkpoints_passed"],
+            total_checkpoints=summary["total_checkpoints"],
+        )
+    elif live_run is not None:
+        live_run["is_live"] = False
+
+    current_run_active = False
+    telemetry_status = "Stopped"
+    message = final_message
+    show_leaderboard = True
+    fsds.stop()
+
 
 def process_fsds():
-    global message, current_run_active, show_leaderboard, telemetry_status
+    global message, current_run_active, telemetry_status, live_run
 
     if not current_run_active:
         return
 
+    if not fsds.is_sim_alive():
+        finalize_run(
+            save_result=False,
+            final_message="Simulator was closed. Live session stopped.",
+        )
+        return
+
+    if not fsds.is_connected():
+        connected = fsds.try_connect()
+        if connected:
+            telemetry_status = "Connected"
+            message = "FSDS connected. Live telemetry active."
+        else:
+            telemetry_status = "Connecting"
+        return
+
     frame = fsds.poll()
     if frame is None:
-        telemetry_status = "Waiting"
+        telemetry_status = "Connected"
         return
 
     telemetry_status = "Connected"
 
-    # If no in-memory drawn track validator exists, we only keep telemetry alive
-    # and do not try to save leaderboard laps automatically.
+    if live_run is not None:
+        live_run["cone_hits"] = int(frame.cone_hits)
+
     if lap_validator is None:
+        if live_run is not None:
+            live_run["lap_time_s"] = float(frame.sim_time_s)
         return
 
     events = lap_validator.update(
@@ -259,41 +320,31 @@ def process_fsds():
         cone_hits=frame.cone_hits,
     )
 
+    summary = lap_validator.get_summary()
+    if live_run is not None:
+        live_run["lap_time_s"] = float(summary["lap_time_s"] or 0.0) if summary["started"] else 0.0
+        live_run["cone_hits"] = int(summary["cone_hits"])
+
     if events["lap_started"]:
-        message = "Lap started. Checkpoints armed."
+        message = "Lap started. Live timing active."
 
     if events["checkpoint_passed"] is not None:
         cp_idx = events["checkpoint_passed"]
         message = f"Checkpoint {cp_idx} passed."
 
     if events["lap_invalid"]:
-        message = f'Lap invalid: {events["reason"]}'
-        current_run_active = False
-        fsds.stop()
+        finalize_run(
+            save_result=False,
+            final_message=f'Lap invalid: {events["reason"]}',
+        )
+        return
 
     if events["lap_finished"]:
-        lap_time = lap_validator.get_lap_time()
-        summary = lap_validator.get_summary()
-
-        name = simpledialog.askstring("Lap Complete", "Enter driver name:")
-        if not name:
-            name = "Anonymous"
-
-        db.insert_lap(
-            map_hash=current_map_hash,
-            map_name=selected_map_name,
-            player_name=name,
-            source=current_run_source,
-            lap_time_s=lap_time,
-            cone_hits=summary["cone_hits"],
-            checkpoints_passed=summary["checkpoints_passed"],
-            total_checkpoints=summary["total_checkpoints"],
+        finalize_run(
+            save_result=True,
+            final_message=f'Lap complete. Result frozen and saved.',
         )
-
-        message = f'Lap saved: {name} | {lap_time:.3f}s | cones hit: {summary["cone_hits"]}'
-        current_run_active = False
-        fsds.stop()
-        show_leaderboard = True
+        return
 
 
 running = True
@@ -315,7 +366,7 @@ while running:
             if show_leaderboard:
                 map_rows = db.get_current_map_leaderboard(current_map_hash, limit=20) if current_map_hash else []
                 duel_stats = db.get_duel_stats(current_map_hash) if current_map_hash else {"ramse_wins": 0, "human_wins": 0, "comparisons": 0}
-                modal = draw_leaderboard_modal(screen, fonts, width, height, leaderboard_tab, map_rows, duel_stats)
+                modal = draw_leaderboard_modal(screen, fonts, width, height, leaderboard_tab, map_rows, duel_stats, live_run)
 
                 if modal["close"].collidepoint((mx, my)):
                     show_leaderboard = False
@@ -417,12 +468,13 @@ while running:
     if show_leaderboard:
         map_rows = db.get_current_map_leaderboard(current_map_hash, limit=20) if current_map_hash else []
         duel_stats = db.get_duel_stats(current_map_hash) if current_map_hash else {"ramse_wins": 0, "human_wins": 0, "comparisons": 0}
-        draw_leaderboard_modal(screen, fonts, width, height, leaderboard_tab, map_rows, duel_stats)
+        draw_leaderboard_modal(screen, fonts, width, height, leaderboard_tab, map_rows, duel_stats, live_run)
 
     draw_custom_cursor(screen, pygame.mouse.get_pos())
 
     pygame.display.flip()
     clock.tick(60)
 
+fsds.stop()
 pygame.quit()
 sys.exit()

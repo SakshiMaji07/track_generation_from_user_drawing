@@ -1,7 +1,6 @@
-import math
 import random
 from dataclasses import dataclass
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 
 import pygame
 
@@ -361,6 +360,7 @@ def draw_invalid_popup(screen, fonts, width, height, title, body):
     popup_w, popup_h = min(500, width - 60), 240
     popup_x = width // 2 - popup_w // 2
     popup_y = height // 2 - popup_h // 2
+
     popup_rect = pygame.Rect(popup_x, popup_y, popup_w, popup_h)
 
     pygame.draw.rect(screen, PANEL_2, popup_rect, border_radius=20)
@@ -417,13 +417,13 @@ def draw_loading_screen(screen, fonts, width, height, duration_ms, clock, sparks
         clock.tick(60)
 
 
-def draw_leaderboard_modal(screen, fonts, width, height, active_tab, current_map_rows, duel_stats):
+def draw_leaderboard_modal(screen, fonts, width, height, active_tab, current_map_rows, duel_stats, live_run):
     overlay = pygame.Surface((width, height), pygame.SRCALPHA)
     overlay.fill((0, 0, 0, 180))
     screen.blit(overlay, (0, 0))
 
     modal_w = min(1020, width - 80)
-    modal_h = min(650, height - 80)
+    modal_h = min(680, height - 80)
     x = width // 2 - modal_w // 2
     y = height // 2 - modal_h // 2
     rect = pygame.Rect(x, y, modal_w, modal_h)
@@ -442,14 +442,30 @@ def draw_leaderboard_modal(screen, fonts, width, height, active_tab, current_map
     header_y = y + 138
 
     if active_tab == "map":
+        if live_run is not None:
+            draw_text(screen, "Live Run", x + 28, header_y - 30, fonts["subtitle"], RED_2)
+            live_rect = pygame.Rect(x + 24, header_y - 2, modal_w - 48, 70)
+            pygame.draw.rect(screen, PANEL_2, live_rect, border_radius=14)
+            pygame.draw.rect(screen, RED_2 if live_run["is_live"] else GREEN, live_rect, 2, border_radius=14)
+
+            draw_text(screen, f'Name: {live_run["player_name"]}', x + 40, header_y + 16, fonts["small"], TEXT)
+            draw_text(screen, f'Source: {live_run["source"]}', x + 220, header_y + 16, fonts["small"], MUTED)
+            draw_text(screen, f'Time: {live_run["lap_time_s"]:.3f}s', x + 390, header_y + 16, fonts["small"], TEXT)
+            draw_text(screen, f'Cones: {live_run["cone_hits"]}', x + 560, header_y + 16, fonts["small"], TEXT)
+            draw_text(screen, "LIVE" if live_run["is_live"] else "FROZEN", x + 700, header_y + 16, fonts["small"], RED_2 if live_run["is_live"] else GREEN)
+
+            table_y = header_y + 96
+        else:
+            table_y = header_y
+
         headers = ["Rank", "Name", "Source", "Lap Time (s)", "Cones", "Date"]
         xs = [x + 28, x + 90, x + 260, x + 410, x + 570, x + 650]
 
         for hx, htxt in zip(xs, headers):
-            draw_text(screen, htxt, hx, header_y, fonts["small"], RED_2)
+            draw_text(screen, htxt, hx, table_y, fonts["small"], RED_2)
 
-        row_y = header_y + 34
-        for idx, row in enumerate(current_map_rows[:12], start=1):
+        row_y = table_y + 34
+        for idx, row in enumerate(current_map_rows[:10], start=1):
             draw_text(screen, str(idx), xs[0], row_y, fonts["small"], TEXT)
             draw_text(screen, row["player_name"][:16], xs[1], row_y, fonts["small"], TEXT)
             draw_text(screen, row["source"], xs[2], row_y, fonts["small"], MUTED)
@@ -457,6 +473,7 @@ def draw_leaderboard_modal(screen, fonts, width, height, active_tab, current_map
             draw_text(screen, str(row["cone_hits"]), xs[4], row_y, fonts["small"], TEXT)
             draw_text(screen, row["created_at"][:19].replace("T", " "), xs[5], row_y, fonts["small"], MUTED)
             row_y += 34
+
     else:
         draw_text(screen, f'RAMS-e Wins: {duel_stats["ramse_wins"]}', x + 34, header_y + 20, fonts["font"], TEXT)
         draw_text(screen, f'IITR Human Wins: {duel_stats["human_wins"]}', x + 34, header_y + 60, fonts["font"], TEXT)
