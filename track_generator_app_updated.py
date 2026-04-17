@@ -56,7 +56,7 @@ CSV_PREVIEW_PADDING = 60
 # ============================================================
 VEHICLE_NAME = "FSCar"
 WHEELBASE = 1.5
-TARGET_SPEED = 9.0
+# TARGET_SPEED = 5.0
 MAX_STEER_RAD = 0.4363
 
 LD_MIN = 1.0
@@ -66,7 +66,7 @@ SPEED_KP = 0.4
 SPEED_KI = 0.05
 SPEED_KD = 0.1
 BRAKE_THRESHOLD = 0.3
-MAX_THROTTLE = 0.5
+MAX_THROTTLE = 0.2
 
 CONTROL_DT = 0.05
 SEARCH_WINDOW = 20
@@ -411,7 +411,7 @@ CSV_PREVIEW_PADDING = 60
 # ============================================================
 VEHICLE_NAME = "FSCar"
 WHEELBASE = 1.5
-TARGET_SPEED = 9.0
+TARGET_SPEED = 5.0
 MAX_STEER_RAD = 0.4363
 
 LD_MIN = 1.0
