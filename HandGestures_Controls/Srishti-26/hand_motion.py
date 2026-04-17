@@ -12,12 +12,12 @@ import time
 # =========================================================
 MODEL_PATH = str(pathlib.Path(__file__).parent / "hand_landmarker.task")
 
-base_options = python.BaseOptions(model_asset_path=MODEL_PATH)
+base_options = python.BaseOptions(model_asset_path=MODEL_PATH)  
 options = vision.HandLandmarkerOptions(
     base_options=base_options,
     num_hands=2,
-    min_hand_detection_confidence=0.5,
-    min_tracking_confidence=0.5,
+    min_hand_detection_confidence=0.3,
+    min_tracking_confidence=0.3,
 )
 detector = vision.HandLandmarker.create_from_options(options)
 
@@ -193,12 +193,12 @@ def get_finger_curl(hand_landmarks):
 def send_to_vehicle(smoothed_angle, gas_amount, brake_amount):
     # Convert approx steering degrees to FSDS [-1, 1]
     steering = max(-1.0, min(1.0, smoothed_angle / 90.0))
-    throttle = max(0.0, min(1.0, gas_amount))
+    throttle = max(0.0, min(0.5, gas_amount))
     brake = max(0.0, min(1.0, brake_amount))
 
     car_controls = fsds.CarControls()
     car_controls.steering = steering * 1.2
-    car_controls.throttle = throttle
+    car_controls.throttle = throttle*0.8
     car_controls.brake = brake
 
     client.setCarControls(car_controls)
@@ -341,15 +341,17 @@ while cap.isOpened():
                 2,
             )
         else:
-            # Only one true left/right pair not found
-            if calib_state != CalibState.WAITING:
-                calib_state = CalibState.WAITING
-                print("Hands lost — will re-calibrate on next appearance.")
+            # # Only one true left/right pair not found
+            # if calib_state != CalibState.WAITING:
+            #     calib_state = CalibState.WAITING
+            #     print("Hands lost — will re-calibrate on next appearance.")
+            pass
     else:
         # Lost hands entirely
         if calib_state != CalibState.WAITING:
             calib_state = CalibState.WAITING
             print("Hands lost — will re-calibrate on next appearance.")
+            client.reset()
 
     # -----------------------------------------------------
     # Manual calibration / exit keys
@@ -381,7 +383,9 @@ while cap.isOpened():
                 calib_curl_right = get_finger_curl(right_hand_landmarks)
                 calib_state = CalibState.CALIBRATED
                 print("Manual calibration complete!")
-
+                
+           
+        
     if key == 27:  # ESC
         break
 

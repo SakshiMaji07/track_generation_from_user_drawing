@@ -1,11 +1,11 @@
 import csv
 import hashlib
 import json
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 Point2D = Tuple[float, float]
 
-X_FORWARD_OFFSET = 4.0
+X_FORWARD_OFFSET = 2.0
 
 
 def compute_center(points: List[Point2D]):
@@ -31,8 +31,10 @@ def map_fingerprint(track_points, blue, yellow, orange):
     return hashlib.sha256(raw).hexdigest()[:16]
 
 
-def export_csv(filename, blue, yellow, orange):
-    if orange:
+def export_csv(filename, blue, yellow, orange, origin: Optional[Point2D] = None):
+    if origin is not None:
+        origin_x, origin_y = origin
+    elif orange:
         origin_x, origin_y = compute_center(orange)
     else:
         all_points = blue + yellow + orange
@@ -60,4 +62,8 @@ def export_csv(filename, blue, yellow, orange):
         "blue_count": len(blue_final),
         "yellow_count": len(yellow_final),
         "orange_count": len(orange_final),
+        "origin": (origin_x, origin_y),
+        "blue_local": blue_final,
+        "yellow_local": yellow_final,
+        "orange_local": orange_final,
     }

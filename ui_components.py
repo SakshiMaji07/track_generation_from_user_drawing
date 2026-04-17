@@ -231,8 +231,15 @@ def draw_grid(screen, draw_rect):
 
 
 def draw_track_area(screen, draw_rect):
-    pygame.draw.rect(screen, TRACK_DARK, draw_rect, border_radius=24)
-    pygame.draw.rect(screen, TRACK_EDGE, draw_rect, 2, border_radius=24)
+    panel = pygame.Surface((draw_rect.width, draw_rect.height), pygame.SRCALPHA)
+    pygame.draw.rect(panel, (22, 24, 30), panel.get_rect(), border_radius=24)
+    pygame.draw.rect(panel, (255, 60, 80, 18), panel.get_rect(), 2, border_radius=24)
+    screen.blit(panel, draw_rect.topleft)
+
+    glow = pygame.Surface((draw_rect.width + 20, draw_rect.height + 20), pygame.SRCALPHA)
+    pygame.draw.rect(glow, (255, 60, 80, 18), glow.get_rect(), border_radius=28)
+    screen.blit(glow, (draw_rect.x - 10, draw_rect.y - 10))
+
     draw_grid(screen, draw_rect)
 
     stripe_w = 18
@@ -243,6 +250,9 @@ def draw_track_area(screen, draw_rect):
         color = WHITE if i % 2 == 0 else (35, 35, 35)
         pygame.draw.rect(screen, color, (sx + i * stripe_w, sy, stripe_w, stripe_h), border_radius=2)
 
+    hint = pygame.font.SysFont("segoeui", 16)
+    draw_text(screen, "Start in green • Finish in red • Loaded CSVs preview cones only", draw_rect.x + 18, draw_rect.bottom - 30, hint, MUTED)
+
 
 def _draw_wrapped_block(screen, text, x, y, width, max_lines, font, color):
     lines = wrap_text_to_width(text, font, width)
@@ -252,7 +262,7 @@ def _draw_wrapped_block(screen, text, x, y, width, max_lines, font, color):
         yy += font.get_height() + 4
 
 
-def draw_side_panel(screen, layout, fonts, message, valid, points_count, scale, cone_spacing_m, selected_csv_path, can_run_fsds, telemetry_status):
+def draw_side_panel(screen, layout, fonts, message, valid, points_count, scale, cone_spacing_m, selected_csv_path, can_run_fsds, telemetry_status, preview_mode="track", smoothing_info=""):
     w = layout["LEFT_PANEL_W"]
     h = layout["HEIGHT"]
     pad = layout["MARGIN"]
@@ -268,20 +278,31 @@ def draw_side_panel(screen, layout, fonts, message, valid, points_count, scale, 
     y0 = clamp(int(h * 0.14), 115, 150)
     line_gap = clamp(int(h * 0.028), 22, 32)
 
-    draw_text(screen, "Session", pad + 10, y0, fonts["subtitle"], TEXT)
-    draw_text(screen, f"Scale: 1 px = {scale:.2f} m", pad + 10, y0 + line_gap, fonts["small"], MUTED)
-    draw_text(screen, f"Cone spacing: {cone_spacing_m:.2f} m", pad + 10, y0 + 2 * line_gap, fonts["small"], MUTED)
-    draw_text(screen, f"Points: {points_count}", pad + 10, y0 + 3 * line_gap, fonts["small"], MUTED)
-    draw_text(screen, f"FSDS: {telemetry_status}", pad + 10, y0 + 4 * line_gap, fonts["small"], MUTED)
+    card_rect = pygame.Rect(pad + 4, y0 - 10, w - 2 * pad - 8, 170)
+    pygame.draw.rect(screen, PANEL_2, card_rect, border_radius=18)
+    pygame.draw.rect(screen, (52, 58, 68), card_rect, 1, border_radius=18)
 
-    badge_y = y0 + 5 * line_gap + 8
+    draw_text(screen, "Session", pad + 18, y0 + 4, fonts["subtitle"], TEXT)
+    draw_text(screen, f"Scale: 1 px = {scale:.2f} m", pad + 18, y0 + 4 + line_gap, fonts["small"], MUTED)
+    draw_text(screen, f"Cone spacing: {cone_spacing_m:.2f} m", pad + 18, y0 + 4 + 2 * line_gap, fonts["small"], MUTED)
+    draw_text(screen, f"Points: {points_count}", pad + 18, y0 + 4 + 3 * line_gap, fonts["small"], MUTED)
+    draw_text(screen, f"FSDS: {telemetry_status}", pad + 18, y0 + 4 + 4 * line_gap, fonts["small"], MUTED)
+
+    badge_y = y0 + 5 * line_gap + 12
     badge_color = GREEN if valid else ORANGE if points_count > 1 else SUBTLE
     badge_text = "VALID" if valid else "DRAWING" if points_count > 1 else "IDLE"
-    pygame.draw.rect(screen, badge_color, (pad + 10, badge_y, 120, 34), border_radius=10)
-    draw_text(screen, badge_text, pad + 40, badge_y + 7, fonts["small"], (18, 18, 18))
+    pygame.draw.rect(screen, badge_color, (pad + 18, badge_y, 120, 34), border_radius=10)
+    draw_text(screen, badge_text, pad + 48, badge_y + 7, fonts["small"], (18, 18, 18))
 
-    msg_y = badge_y + 52
+    mode_rect = pygame.Rect(pad + 148, badge_y, 118, 34)
+    pygame.draw.rect(screen, (36, 41, 50), mode_rect, border_radius=10)
+    pygame.draw.rect(screen, (70, 85, 105), mode_rect, 1, border_radius=10)
+    draw_text(screen, preview_mode.upper(), mode_rect.x + 18, mode_rect.y + 7, fonts["small"], TEXT)
+
+    msg_y = badge_y + 56
     draw_text(screen, "Status", pad + 10, msg_y, fonts["subtitle"], TEXT)
+    if smoothing_info:
+        draw_text(screen, f"Smoothing: {smoothing_info}", pad + 132, msg_y + 2, fonts["small"], MUTED)
     _draw_wrapped_block(
         screen,
         message,
@@ -315,7 +336,13 @@ def draw_side_panel(screen, layout, fonts, message, valid, points_count, scale, 
 
 
 def draw_start_end_guides(screen, start_point, end_point, anchor_radius, fonts):
-    pygame.draw.line(screen, WHITE, end_point, start_point, 3)
+    mid = ((start_point[0] + end_point[0]) // 2, (start_point[1] + end_point[1]) // 2)
+    guide = pygame.Surface((abs(start_point[0] - end_point[0]) + 40, anchor_radius * 3), pygame.SRCALPHA)
+    pygame.draw.line(guide, (255, 255, 255, 60), (20, guide.get_height() // 2), (guide.get_width() - 20, guide.get_height() // 2), 3)
+    screen.blit(guide, (min(start_point[0], end_point[0]) - 20, mid[1] - guide.get_height() // 2))
+
+    pygame.draw.circle(screen, WHITE, mid, 4)
+    pygame.draw.circle(screen, (110, 120, 135), mid, 10, 1)
 
     pygame.draw.circle(screen, RED_2, end_point, anchor_radius, 3)
     pygame.draw.circle(screen, WHITE, end_point, 5)
@@ -326,15 +353,19 @@ def draw_start_end_guides(screen, start_point, end_point, anchor_radius, fonts):
     draw_text(screen, "START", start_point[0] - 24, start_point[1] - 38, fonts["small"], GREEN)
 
 
-def draw_track(screen, track_points, is_valid, currently_drawing, start_point, end_point, anchor_radius, fonts):
+def draw_track(screen, track_points, is_valid, currently_drawing, start_point, end_point, anchor_radius, fonts, preview_mode="track"):
     if len(track_points) >= 2:
-        pygame.draw.lines(screen, (20, 20, 20), False, track_points, 12)
+        shadow = pygame.Surface(screen.get_size(), pygame.SRCALPHA)
+        pygame.draw.lines(shadow, (0, 0, 0, 90), False, track_points, 14)
+        screen.blit(shadow, (0, 0))
+
         base_color = GREEN if is_valid else RED_2
+        pygame.draw.lines(screen, (32, 32, 36), False, track_points, 12)
         pygame.draw.lines(screen, base_color, False, track_points, 4)
 
         pygame.draw.circle(screen, WHITE, track_points[0], 5)
         pygame.draw.circle(screen, RED_2, track_points[0], 11, 2)
-        pygame.draw.circle(screen, MUTED, track_points[-1], 4)
+        pygame.draw.circle(screen, MUTED, track_points[-2] if len(track_points) > 2 else track_points[-1], 4)
 
     draw_start_end_guides(screen, start_point, end_point, anchor_radius, fonts)
 
