@@ -46,7 +46,7 @@ FSDS_PYTHON_PATH = str(pathlib.Path(__file__).parent / "fsds")
 FSDS_SIMULATOR_EXE = pathlib.Path(__file__).parent.parent / "fsds-v2.2.0-windows" / "FSDS.exe"
 FSDS_SETTINGS_JSON = pathlib.Path(__file__).parent.parent / "fsds-v2.2.0-windows" / "settings.json"
 FSDS_CUSTOM_MAP_TEMPLATE = '-CustomMapPath="{csv_path}"'
-
+LEADERBOARD_OVERLAY = str(pathlib.Path(__file__).parent / "race_ui.py")
 SMOOTHING_RESAMPLE_STEP_PX = 12.0
 SMOOTHING_ITERATIONS = 3
 CSV_PREVIEW_PADDING = 60
@@ -1195,7 +1195,7 @@ def start_fsds_run(source="Human"):
     with open("live_data.json", "w") as f:
         json.dump({"time": 0.0, "cones": 0, "finished": False}, f)
 
-    subprocess.Popen([sys.executable, "race_ui.py"])
+    subprocess.Popen([sys.executable, LEADERBOARD_OVERLAY])
 
 
 def finalize_run(save_result: bool, final_message: str, time_to_save=0.0, cones_to_save=0):
