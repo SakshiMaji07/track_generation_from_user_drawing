@@ -1,20 +1,8 @@
-# IITRMS Autonomous Track Generator
----
-
-## What this is
-
-This project was built for **IIT Roorkee Motorsports (IITRMS)**. 
-The idea is simple: instead of manually placing hundreds of cones to define a Formula Student Driverless (FSDS) track, you draw the centerline with your mouse, and the tool handles the rest — cone placement, track validation, CSV export, and even lap timing when you run it in the simulator.
-
----
-
 ## Features
 
 - **Freehand track drawing** — click and drag inside the canvas to draw a centerline. The track must start inside the green START circle and end inside the red END circle to form a valid closed loop.
 - **Real-time self-intersection detection** — the canvas checks for crossovers as you draw. If the path would self-intersect, drawing stops immediately and a popup prompts you to clear and redraw.
 - **Automatic cone generation** — once a valid track is drawn, blue (left), yellow (right), and big-orange (start gate) cones are placed along the track at configurable spacing using normal-offset geometry.
-- **Spline smoothing** — raw mouse paths are smoothed with a periodic B-spline (`scipy.interpolate.splprep`) before cone generation so the result looks like an actual track, not a jagged scribble.
-- **FSDS-ready CSV export** — cones are shifted so the car starts at the origin and exported in the format FSDS expects: `color, x, y, 0, 0, 0, 0`.
 - **Load existing CSVs** — you can load a previously exported CSV back into the designer to preview its cones on the canvas.
 - **One-click simulator launch** — the app launches FSDS directly with the selected CSV via subprocess, passing the custom map path as a CLI argument.
 - **Live telemetry & lap validation** — in `track_generator_app_updated.py`, the FSDS adapter polls the simulator for car position and collision data. The lap validator tracks checkpoint progression, blocks reverse exploits, and detects lap completion.
